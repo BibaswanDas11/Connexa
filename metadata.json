@@ -1,0 +1,6 @@
+{
+  "name": "Connexa",
+  "description": "A secure, real-time chat application with ID-based connections, online status, and read receipts.",
+  "requestFramePermissions": [],
+  "majorCapabilities": []
+}
