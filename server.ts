@@ -549,8 +549,8 @@ async function startServer() {
     });
   }
 
-  const PORT = 3000;
-  httpServer.listen(PORT, "0.0.0.0", () => {
+  const PORT = process.env.PORT || 3000;
+  httpServer.listen(Number(PORT), "0.0.0.0", () => {
     console.log(`Server running at http://0.0.0.0:${PORT}`);
   });
 }

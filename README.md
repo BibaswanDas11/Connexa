@@ -1,20 +1,53 @@
-<div align="center">
-<img width="1200" height="475" alt="GHBanner" src="https://github.com/user-attachments/assets/0aa67016-6eaf-458a-adb2-6e31a0763ed6" />
-</div>
+# Connexa - Full-Stack Chat Application
 
-# Run and deploy your AI Studio app
+This is a full-stack application with a React frontend and an Express/Socket.io backend.
 
-This contains everything you need to run your app locally.
+## 🚀 Deployment Instructions
 
-View your app in AI Studio: https://ai.studio/apps/3fe4c201-fdae-43bd-a9aa-dd7bbb1f76a8
+Because this app uses a **Node.js backend** and a **SQLite database**, it cannot be hosted on static-only services like GitHub Pages. You need a platform that supports Node.js.
 
-## Run Locally
+### Recommended Platforms
+- **Render** (Web Service)
+- **Railway**
+- **Railway.app**
+- **DigitalOcean App Platform**
 
-**Prerequisites:**  Node.js
+### Deployment Steps (e.g., on Render or Railway)
 
+1. **Build Command:**
+   ```bash
+   npm install && npm run build
+   ```
 
-1. Install dependencies:
-   `npm install`
-2. Set the `GEMINI_API_KEY` in [.env.local](.env.local) to your Gemini API key
-3. Run the app:
-   `npm run dev`
+2. **Start Command:**
+   ```bash
+   npm start
+   ```
+
+3. **Environment Variables:**
+   If you have any secrets (like `GEMINI_API_KEY` or `JWT_SECRET`), make sure to add them in the platform's dashboard.
+
+### Why was my screen white?
+If you tried to host this on **GitHub Pages**, the screen appeared white because:
+1. **Missing Backend:** GitHub Pages only serves static files and doesn't run the `server.ts`.
+2. **Path Issues:** Static sites on GitHub Pages often need a specific `base` path in `vite.config.ts`.
+3. **Database:** SQLite requires an actual server disk to store your messages and users.
+
+## 🛠ï¸è¿ Local Development
+
+1. Clone the repository.
+2. Install dependencies:
+   ```bash
+   npm install
+   ```
+3. Start the development server:
+   ```bash
+   npm run dev
+   ```
+4. Open [http://localhost:3000](http://localhost:3000) in your browser.
+
+## 📁 Project Structure
+- `server.ts`: The Express/Socket.io backend.
+- `src/`: The React frontend source code.
+- `index.html`: The entry point for the frontend.
+- `connexa.db`: The SQLite database file (created automatically).
