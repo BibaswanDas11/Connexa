@@ -1,0 +1,115 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+    // 0. Global Safety Net
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // --- Helpers ---
+    function isSignedIn() {
+      return request.auth != null;
+    }
+    
+    function isOwner(userId) {
+      return isSignedIn() && request.auth.uid == userId;
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    // --- Validation Blueprints ---
+    
+    function isValidUser(data) {
+      return data.keys().hasAll(['id', 'username', 'email', 'connexaId']) &&
+             data.keys().size() <= 10 &&
+             data.id == request.auth.uid &&
+             data.username is string && data.username.size() <= 50 &&
+             data.email is string && data.email.size() <= 100 &&
+             data.connexaId is string && data.connexaId.matches('^CX-[A-Z0-9]{5}$') &&
+             (!('onlineStatus' in data) || data.onlineStatus is int) &&
+             (!('lastSeen' in data) || data.lastSeen is string); // In simple setup string is fine, but server timestamp is better
+    }
+
+    function isValidFriend(data) {
+      return data.keys().hasAll(['userId', 'friendId', 'status']) &&
+             data.userId == request.auth.uid &&
+             data.status in ['pending', 'accepted', 'blocked'];
+    }
+
+    function isValidMessage(data) {
+      return data.keys().hasAll(['senderId', 'content', 'createdAt']) &&
+             data.senderId == request.auth.uid &&
+             data.content is string && data.content.size() <= 5000;
+    }
+
+    function isValidChat(data) {
+      return data.keys().hasAll(['id', 'name', 'type', 'createdBy']) &&
+             data.name is string && data.name.size() <= 100 &&
+             data.type == 'group';
+    }
+
+    // --- Collection Routes ---
+
+    match /users/{userId} {
+      allow get: if isSignedIn();
+      allow list: if isSignedIn(); // Allow searching for users by connexaId
+      allow create: if isOwner(userId) && isValidUser(incoming());
+      allow update: if isOwner(userId) && isValidUser(incoming()) && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['username', 'avatarUrl', 'onlineStatus', 'lastSeen', 'notificationEnabled'])
+      );
+    }
+
+    match /users/{userId}/friends/{friendId} {
+      allow read: if isOwner(userId);
+      allow create: if isOwner(userId) && isValidFriend(incoming());
+      allow update: if isOwner(userId) && isValidFriend(incoming()) && (
+        incoming().diff(existing()).affectedKeys().hasOnly(['status', 'updatedAt'])
+      );
+      allow delete: if isOwner(userId);
+    }
+
+    match /chats/{chatId} {
+      allow read: if isSignedIn() && (
+        exists(/databases/$(database)/documents/chats/$(chatId)/members/$(request.auth.uid))
+      );
+      allow create: if isSignedIn() && isValidChat(incoming()) && incoming().createdBy == request.auth.uid;
+      allow update: if isSignedIn() && (
+        existing().createdBy == request.auth.uid // Admins can rename/change avatar
+      ) && incoming().diff(existing()).affectedKeys().hasOnly(['name', 'avatarUrl']);
+      
+      match /members/{memberId} {
+        allow read: if isSignedIn() && exists(/databases/$(database)/documents/chats/$(chatId)/members/$(request.auth.uid));
+        allow create: if isSignedIn(); // Users can join or be added
+        allow delete: if isSignedIn() && (
+          isOwner(memberId) || get(/databases/$(database)/documents/chats/$(chatId)).data.createdBy == request.auth.uid
+        );
+      }
+
+      match /messages/{messageId} {
+        allow read: if isSignedIn() && exists(/databases/$(database)/documents/chats/$(chatId)/members/$(request.auth.uid));
+        allow create: if isSignedIn() && 
+                      exists(/databases/$(database)/documents/chats/$(chatId)/members/$(request.auth.uid)) &&
+                      isValidMessage(incoming()) && incoming().chatId == chatId;
+        allow delete: if isOwner(incoming().senderId);
+      }
+    }
+
+    match /direct_messages/{dmPath}/messages/{messageId} {
+      // dmPath usually format: uid1_uid2
+      allow read: if isSignedIn() && (dmPath.contains(request.auth.uid));
+      allow create: if isSignedIn() && (dmPath.contains(request.auth.uid)) && isValidMessage(incoming());
+      allow delete: if isOwner(incoming().senderId);
+    }
+  }
+}

@@ -1,9 +1,74 @@
 import React, { useState, useEffect, useRef } from 'react';
 import { useAuth } from '../context/AuthContext';
-import { useSocket } from '../context/SocketContext';
 import { Search, Send, User, MessageCircle, LogOut, Check, CheckCheck, X, Users, UserPlus, Trash2, Settings, Save, ChevronLeft, Plus, AlertCircle } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import { cn } from '../lib/utils';
+import { db, auth } from '../lib/firebase';
+import { 
+  collection, 
+  query, 
+  where, 
+  onSnapshot, 
+  addDoc, 
+  updateDoc, 
+  doc, 
+  getDocs, 
+  getDoc,
+  setDoc,
+  deleteDoc,
+  orderBy,
+  limit,
+  serverTimestamp,
+  Timestamp,
+  collectionGroup
+} from 'firebase/firestore';
+
+enum OperationType {
+  CREATE = 'create',
+  UPDATE = 'update',
+  DELETE = 'delete',
+  LIST = 'list',
+  GET = 'get',
+  WRITE = 'write',
+}
+
+interface FirestoreErrorInfo {
+  error: string;
+  operationType: OperationType;
+  path: string | null;
+  authInfo: {
+    userId?: string | null;
+    email?: string | null;
+    emailVerified?: boolean | null;
+    isAnonymous?: boolean | null;
+    tenantId?: string | null;
+    providerInfo?: {
+      providerId?: string | null;
+      email?: string | null;
+    }[];
+  }
+}
+
+function handleFirestoreError(error: unknown, operationType: OperationType, path: string | null) {
+  const errInfo: FirestoreErrorInfo = {
+    error: error instanceof Error ? error.message : String(error),
+    authInfo: {
+      userId: auth.currentUser?.uid,
+      email: auth.currentUser?.email,
+      emailVerified: auth.currentUser?.emailVerified,
+      isAnonymous: auth.currentUser?.isAnonymous,
+      tenantId: auth.currentUser?.tenantId,
+      providerInfo: auth.currentUser?.providerData?.map(provider => ({
+        providerId: provider.providerId,
+        email: provider.email,
+      })) || []
+    },
+    operationType,
+    path
+  }
+  console.error('Firestore Error: ', JSON.stringify(errInfo));
+  throw new Error(JSON.stringify(errInfo));
+}
 
 interface ChatMessage {
   id: string;
@@ -78,7 +143,6 @@ const AVATAR_OPTIONS = [
 
 export default function ChatApp() {
   const { user, updateUser, logout } = useAuth();
-  const { socket } = useSocket();
   const [searchId, setSearchId] = useState('');
   const [searchResults, setSearchResults] = useState<UserProfile | null>(null);
   const [selectedChat, setSelectedChat] = useState<ChatTarget | null>(null);
@@ -161,42 +225,61 @@ export default function ChatApp() {
   // Initialize: Load friends and pending requests
   useEffect(() => {
     if (!user) return;
-    fetchFriends();
-    fetchGroups();
-    fetchPendingRequests();
+    
+    // Listen for Friends
+    const friendsQuery = query(collection(db, 'users', user.id, 'friends'), where('status', 'in', ['accepted', 'blocked']));
+    const unsubscribeFriends = onSnapshot(friendsQuery, async (snapshot) => {
+      const friendsData = await Promise.all(snapshot.docs.map(async (d) => {
+        const friendData = d.data();
+        // Fetch friend profile for username/avatar
+        const userDoc = await getDoc(doc(db, 'users', friendData.friendId));
+        return {
+          id: friendData.friendId,
+          ...userDoc.data(),
+          status: friendData.status
+        } as UserProfile;
+      }));
+      setChats(friendsData);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.id}/friends`));
+
+    // Listen for Groups
+    const groupsQuery = query(collection(db, 'chats'), where('memberIds', 'array-contains', user.id));
+    const unsubscribeGroups = onSnapshot(groupsQuery, (snapshot) => {
+      const groupsData = snapshot.docs.map(d => ({ id: d.id, ...d.data() } as Group));
+      setGroups(groupsData);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'chats'));
+
+    // Listen for Pending Requests
+    const pendingQuery = query(collection(db, 'users', user.id, 'friends'), where('status', '==', 'pending'));
+    const unsubscribePending = onSnapshot(pendingQuery, async (snapshot) => {
+      const pendingData = await Promise.all(snapshot.docs.map(async (d) => {
+        const friendData = d.data();
+        const userDoc = await getDoc(doc(db, 'users', friendData.userId));
+        return {
+          id: friendData.userId,
+          ...userDoc.data()
+        } as UserProfile;
+      }));
+      setPendingRequests(pendingData);
+      if (pendingData.length > 0) {
+        setToast({ message: "You have new friend requests!", type: 'info' });
+      }
+    }, (err) => handleFirestoreError(err, OperationType.LIST, `users/${user.id}/friends`));
+
     setEditUsername(user.username);
     if (user.avatarUrl) setSelectedAvatar(user.avatarUrl);
     setNotificationsEnabled(user.notificationEnabled === 1);
+
+    return () => {
+      unsubscribeFriends();
+      unsubscribeGroups();
+      unsubscribePending();
+    };
   }, [user]);
 
-  const fetchGroups = async () => {
-    try {
-      const res = await fetch(`/api/chats/list/${user?.id}`);
-      if (res.ok) {
-        setGroups(await res.json());
-      }
-    } catch (e) {}
-  };
-
-  const fetchFriends = async () => {
-    try {
-      const res = await fetch(`/api/friends/list/${user?.id}`);
-      if (res.ok) {
-        const data = await res.json();
-        setChats(data);
-      }
-    } catch (e) {}
-  };
-
-  const fetchPendingRequests = async () => {
-    try {
-      const res = await fetch(`/api/friends/pending/${user?.id}`);
-      if (res.ok) {
-        const data = await res.json();
-        setPendingRequests(data);
-      }
-    } catch (e) {}
-  };
+  const fetchGroups = async () => {}; // Replaced by onSnapshot
+  const fetchFriends = async () => {}; // Replaced by onSnapshot
+  const fetchPendingRequests = async () => {}; // Replaced by onSnapshot
 
   // Request notification permission
   useEffect(() => {
@@ -205,121 +288,43 @@ export default function ChatApp() {
     }
   }, []);
 
+  // Listen for active chat messages
   useEffect(() => {
-    if (!socket) return;
+    if (!selectedChat || !user) {
+      setMessages([]);
+      return;
+    }
 
-    socket.on('receive_message', (msg: ChatMessage) => {
-      // If message is from a new friend not in our list, refresh list
-      if (!msg.chatId && !chats.some(c => c.id === msg.senderId) && msg.senderId !== user?.id) {
-        fetchFriends();
-      }
-
-      const isDMChat = selectedChat && selectedChat.type !== 'group' && (msg.senderId === selectedChat.id || msg.receiverId === selectedChat.id);
-      const isGroupChat = selectedChat && selectedChat.type === 'group' && msg.chatId === selectedChat.id;
-      
-      if (isDMChat || isGroupChat) {
-        setMessages(prev => {
-          if (prev.some(m => m.id === msg.id)) return prev;
-          return [...prev, msg];
-        });
-        if (msg.senderId !== user?.id) {
-          socket.emit('mark_read', { messageId: msg.id, senderId: msg.senderId });
-        }
-      }
-
-      // Notification Logic
-      if ((!isDMChat && !isGroupChat) || document.hidden) {
-        if (notificationsEnabled && "Notification" in window && Notification.permission === "granted") {
-          const sender = chats.find(c => c.id === msg.senderId);
-          new Notification(msg.chatId ? `Group Message` : (sender ? `Message from ${sender.username}` : "New Message"), {
-            body: msg.content,
-            icon: sender?.avatarUrl || AVATAR_OPTIONS[0],
-          });
-        }
-      }
-    });
-
-    socket.on('message_sent', (msg: ChatMessage) => {
-      const isForCurrentChat = selectedChat && (
-        (selectedChat.type === 'group' && msg.chatId === selectedChat.id) ||
-        (selectedChat.type !== 'group' && (msg.receiverId === selectedChat.id || msg.senderId === selectedChat.id))
+    let msgQuery;
+    if (selectedChat.type === 'group') {
+      msgQuery = query(
+        collection(db, 'chats', selectedChat.id, 'messages'),
+        orderBy('createdAt', 'asc')
       );
+    } else {
+      // DM path format: minId_maxId
+      const ids = [user.id, selectedChat.id].sort();
+      const dmPath = ids.join('_');
+      msgQuery = query(
+        collection(db, 'direct_messages', dmPath, 'messages'),
+        orderBy('createdAt', 'asc')
+      );
+    }
 
-      if (isForCurrentChat) {
-        setMessages(prev => {
-          if (prev.some(m => m.id === msg.id)) return prev;
-          return [...prev, msg];
-        });
-      }
-    });
+    const unsubscribe = onSnapshot(msgQuery, (snapshot) => {
+      const msgs = snapshot.docs.map(d => {
+        const data = d.data();
+        return {
+          id: d.id,
+          ...data,
+          createdAt: data.createdAt?.toDate?.()?.toISOString() || new Date().toISOString()
+        } as ChatMessage;
+      });
+      setMessages(msgs);
+    }, (err) => handleFirestoreError(err, OperationType.LIST, 'messages'));
 
-    socket.on('message_deleted', ({ messageId }: { messageId: string }) => {
-      setMessages(prev => prev.filter(m => m.id !== messageId));
-    });
-
-    socket.on('message_read', ({ messageId }) => {
-      setMessages(prev => prev.map(m => m.id === messageId ? { ...m, readReceipt: 1 } : m));
-    });
-
-    socket.on('status_change', ({ userId, status }) => {
-      setChats(prev => prev.map(u => u.id === userId ? { ...u, online_status: status } : u));
-      if (selectedChat?.type !== 'group' && selectedChat?.id === userId) {
-        setSelectedChat(prev => prev ? { ...prev, online_status: status } : null);
-      }
-    });
-    
-    socket.on('friend_request_received', (data: { senderId: string }) => {
-      fetchPendingRequests();
-      setToast({ message: "You received a new friend request!", type: 'info' });
-    });
-    
-    socket.on('friend_accepted', (data: { friendId: string }) => {
-      fetchFriends();
-      fetchPendingRequests();
-      setToast({ message: "Friend request accepted!", type: 'success' });
-    });
-    
-    socket.on('friend_removed', ({ friendId }) => {
-      fetchFriends();
-      if (selectedChat?.id === friendId) {
-        setSelectedChat(null);
-        setMobileView('chats');
-      }
-    });
-
-    socket.on('friend_updated', () => {
-      fetchFriends();
-    });
-
-    socket.on('profile_updated', ({ userId, username, avatarUrl }) => {
-      // Update chats list
-      setChats(prev => prev.map(chat => 
-        chat.id === userId ? { ...chat, username, avatarUrl } : chat
-      ));
-      
-      // Update group members if currently viewing a group
-      setCurrentGroupMembers(prev => prev.map(member => 
-        member.id === userId ? { ...member, username, avatarUrl } : member
-      ));
-      
-      // Update selected chat if it's the updated user
-      if (selectedChat?.id === userId) {
-        setSelectedChat(prev => prev ? { ...prev, username, avatarUrl } : null);
-      }
-    });
-
-    return () => {
-      socket.off('receive_message');
-      socket.off('message_sent');
-      socket.off('message_read');
-      socket.off('status_change');
-      socket.off('friend_request_received');
-      socket.off('friend_accepted');
-      socket.off('friend_removed');
-      socket.off('friend_updated');
-      socket.off('profile_updated');
-    };
-  }, [socket, selectedChat, notificationsEnabled, chats]);
+    return () => unsubscribe();
+  }, [selectedChat, user]);
 
   useEffect(() => {
     if (scrollRef.current) {
@@ -328,137 +333,168 @@ export default function ChatApp() {
   }, [messages]);
 
   const handleSearch = async () => {
-    if (!searchId) return;
+    if (!searchId || !user) return;
     try {
-      const res = await fetch(`/api/users/search/${searchId}?searcherId=${user?.id}`);
-      if (res.ok) {
-        setSearchResults(await res.json());
+      const q = query(collection(db, 'users'), where('connexaId', '==', searchId));
+      const snapshot = await getDocs(q);
+      
+      if (!snapshot.empty) {
+        const foundUser = snapshot.docs[0].data() as UserProfile;
+        
+        // Check relationship
+        const relDoc = await getDoc(doc(db, 'users', user.id, 'friends', foundUser.id));
+        const relation = relDoc.exists() ? relDoc.data().status : null;
+        
+        setSearchResults({ ...foundUser, relation });
       } else {
         setSearchResults(null);
       }
     } catch (error) {
+      handleFirestoreError(error, OperationType.GET, 'users');
       setSearchResults(null);
     }
   };
 
   const sendFriendRequest = async (friendId: string) => {
-    if (friendRequestLoading) return;
+    if (!user || friendRequestLoading) return;
     setFriendRequestLoading(friendId);
     try {
-      const res = await fetch('/api/friends/request', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user?.id, friendId }),
+      // 1. Add to my friends as pending (outbound)
+      await setDoc(doc(db, 'users', user.id, 'friends', friendId), {
+        userId: user.id,
+        friendId: friendId,
+        status: 'pending',
+        updatedAt: serverTimestamp()
       });
-      const data = await res.json();
-      if (res.ok) {
-        setToast({ message: "Friend request sent successfully!", type: 'success' });
-        // Update local search results to show pending state immediately
-        if (searchResults && searchResults.id === friendId) {
-          setSearchResults({ ...searchResults, relation: 'pending' });
-        }
-      } else {
-        setToast({ message: data.error || "Failed to send request", type: 'error' });
-        console.error(data.error);
-        // If they are already friends, we should refresh the search to show the correct state
-        if (data.error.includes("already")) {
-          handleSearch();
-        }
+      
+      // 2. Add to their friends as pending (inbound)
+      await setDoc(doc(db, 'users', friendId, 'friends', user.id), {
+        userId: friendId,
+        friendId: user.id,
+        status: 'pending',
+        updatedAt: serverTimestamp()
+      });
+
+      setToast({ message: "Friend request sent successfully!", type: 'success' });
+      if (searchResults && searchResults.id === friendId) {
+        setSearchResults({ ...searchResults, relation: 'pending' });
       }
-    } catch (e) {
-      setToast({ message: "Network error occurred", type: 'error' });
+    } catch (err: any) {
+      handleFirestoreError(err, OperationType.WRITE, 'friends');
     } finally {
       setFriendRequestLoading(null);
     }
   };
 
   const respondToRequest = async (friendId: string, action: 'accept' | 'decline') => {
+    if (!user) return;
     try {
-      const res = await fetch('/api/friends/respond', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user?.id, friendId, action }),
-      });
-      if (res.ok) {
-        fetchPendingRequests();
-        if (action === 'accept') fetchFriends();
+      if (action === 'accept') {
+        // Update both sides to 'accepted'
+        await updateDoc(doc(db, 'users', user.id, 'friends', friendId), {
+          status: 'accepted',
+          updatedAt: serverTimestamp()
+        });
+        await updateDoc(doc(db, 'users', friendId, 'friends', user.id), {
+          status: 'accepted',
+          updatedAt: serverTimestamp()
+        });
+        setToast({ message: "Friend request accepted!", type: 'success' });
+      } else {
+        // Delete both records
+        await deleteDoc(doc(db, 'users', user.id, 'friends', friendId));
+        await deleteDoc(doc(db, 'users', friendId, 'friends', user.id));
       }
-    } catch (e) {}
+    } catch (e) {
+      handleFirestoreError(e, OperationType.WRITE, 'friends');
+    }
   };
 
-  const handleSendMessage = (e: React.FormEvent) => {
+  const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault();
-    if (!inputMessage.trim() || !selectedChat || !socket) return;
+    if (!inputMessage.trim() || !selectedChat || !user) return;
 
-    const payload: any = {
-      senderId: user?.id,
-      content: inputMessage,
-      isForwarded: false
-    };
-
-    if (selectedChat.type === 'group') {
-      payload.chatId = selectedChat.id;
-    } else {
-      payload.receiverId = selectedChat.id;
-    }
-
-    socket.emit('send_message', payload);
+    const content = inputMessage.trim();
     setInputMessage('');
-  };
 
-  const deleteMessage = (messageId: string) => {
-    if (!selectedChat || !socket) return;
-    
-    // Optimistic UI: remove from local state immediately
-    setMessages(prev => prev.filter(m => m.id !== messageId));
-    
-    socket.emit('delete_message', {
-      messageId,
-      userId: user?.id,
-      targetId: selectedChat.id,
-      isGroup: selectedChat.type === 'group'
-    });
-  };
-
-  const forwardMessageToTarget = (target: ChatTarget) => {
-    if (!forwardingMessage || !socket) return;
-    
-    const payload: any = {
-      senderId: user?.id,
-      content: forwardingMessage.content,
-      isForwarded: true
-    };
-
-    if (target.type === 'group') {
-      payload.chatId = target.id;
-    } else {
-      payload.receiverId = target.id;
-    }
-
-    socket.emit('send_message', payload);
-    setShowForwardModal(false);
-    setForwardingMessage(null);
-  };
-
-  const createGroup = async () => {
-    if (!groupName || selectedGroupMembers.length === 0) return;
     try {
-      const res = await fetch('/api/chats/group', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          name: groupName, 
-          creatorId: user?.id, 
-          memberIds: [...selectedGroupMembers, user?.id] 
-        }),
-      });
-      if (res.ok) {
-        fetchGroups();
-        setShowGroupCreate(false);
-        setGroupName('');
-        setSelectedGroupMembers([]);
+      const msgData = {
+        senderId: user.id,
+        senderName: user.username,
+        senderAvatar: user.avatarUrl,
+        content,
+        createdAt: serverTimestamp(),
+        readReceipt: 0,
+        isForwarded: false
+      };
+
+      if (selectedChat.type === 'group') {
+        await addDoc(collection(db, 'chats', selectedChat.id, 'messages'), {
+          ...msgData,
+          chatId: selectedChat.id
+        });
+      } else {
+        const ids = [user.id, selectedChat.id].sort();
+        const dmPath = ids.join('_');
+        await addDoc(collection(db, 'direct_messages', dmPath, 'messages'), {
+          ...msgData,
+          receiverId: selectedChat.id
+        });
       }
-    } catch (e) {}
+    } catch (e) {
+      handleFirestoreError(e, OperationType.CREATE, 'messages');
+    }
+  };
+
+  const deleteMessage = async (messageId: string) => {
+    if (!selectedChat || !user) return;
+    try {
+      if (selectedChat.type === 'group') {
+        await deleteDoc(doc(db, 'chats', selectedChat.id, 'messages', messageId));
+      } else {
+        const ids = [user.id, selectedChat.id].sort();
+        const dmPath = ids.join('_');
+        await deleteDoc(doc(db, 'direct_messages', dmPath, 'messages', messageId));
+      }
+    } catch (e) {
+      handleFirestoreError(e, OperationType.DELETE, 'messages');
+    }
+  };
+
+  const forwardMessageToTarget = async (target: ChatTarget) => {
+    if (!forwardingMessage || !user) return;
+    
+    try {
+      const msgData = {
+        senderId: user.id,
+        senderName: user.username,
+        senderAvatar: user.avatarUrl,
+        content: forwardingMessage.content,
+        createdAt: serverTimestamp(),
+        readReceipt: 0,
+        isForwarded: true
+      };
+
+      if (target.type === 'group') {
+        await addDoc(collection(db, 'chats', target.id, 'messages'), {
+          ...msgData,
+          chatId: target.id
+        });
+      } else {
+        const ids = [user.id, target.id].sort();
+        const dmPath = ids.join('_');
+        await addDoc(collection(db, 'direct_messages', dmPath, 'messages'), {
+          ...msgData,
+          receiverId: target.id
+        });
+      }
+      
+      setToast({ message: "Message forwarded!", type: 'success' });
+      setForwardingMessage(null);
+      setShowForwardModal(false);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.CREATE, 'forward');
+    }
   };
 
   const toggleGroupMember = (uid: string) => {
@@ -469,71 +505,164 @@ export default function ChatApp() {
 
 
 
+  const createGroup = async () => {
+    if (!groupName || selectedGroupMembers.length === 0 || !user) return;
+    try {
+      const memberIds = [...selectedGroupMembers, user.id];
+      const newChatRef = doc(collection(db, 'chats'));
+      const chatId = newChatRef.id;
+      
+      const chatData = {
+        id: chatId,
+        name: groupName,
+        type: 'group',
+        createdBy: user.id,
+        avatarUrl: selectedGroupAvatar,
+        memberIds: memberIds,
+        createdAt: serverTimestamp()
+      };
+
+      await setDoc(newChatRef, chatData);
+      
+      // Initialize membership subcollection for easier listing/security
+      await Promise.all(memberIds.map(uid => 
+        setDoc(doc(db, 'chats', chatId, 'members', uid), {
+          userId: uid,
+          joinedAt: serverTimestamp()
+        })
+      ));
+
+      setShowGroupCreate(false);
+      setGroupName('');
+      setSelectedGroupMembers([]);
+      setToast({ message: "Group created successfully!", type: 'success' });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.CREATE, 'chats');
+    }
+  };
+
+  const updateGroupInfo = async () => {
+    if (!selectedChat || selectedChat.type !== 'group' || !user) return;
+    try {
+      await updateDoc(doc(db, 'chats', selectedChat.id), {
+        name: editGroupName,
+        avatarUrl: selectedGroupAvatar
+      });
+      setSelectedChat({ ...selectedChat, name: editGroupName, avatarUrl: selectedGroupAvatar } as Group);
+      setShowGroupSettings(false);
+      setToast({ message: "Group updated!", type: 'success' });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `chats/${selectedChat.id}`);
+    }
+  };
+
+  const addMemberToGroup = async (uid: string) => {
+    if (!selectedChat || selectedChat.type !== 'group') return;
+    try {
+      const chatRef = doc(db, 'chats', selectedChat.id);
+      const chatDoc = await getDoc(chatRef);
+      if (!chatDoc.exists()) return;
+      
+      const currentMembers = chatDoc.data().memberIds || [];
+      if (!currentMembers.includes(uid)) {
+        const newMembers = [...currentMembers, uid];
+        await updateDoc(chatRef, { memberIds: newMembers });
+        await setDoc(doc(db, 'chats', selectedChat.id, 'members', uid), {
+          userId: uid,
+          joinedAt: serverTimestamp()
+        });
+        
+        // Refresh local members list
+        const resMem = await getDocs(collection(db, 'chats', selectedChat.id, 'members'));
+        const membersData = await Promise.all(resMem.docs.map(async (d) => {
+          const userDoc = await getDoc(doc(db, 'users', d.id));
+          return { id: d.id, ...userDoc.data() } as UserProfile;
+        }));
+        setCurrentGroupMembers(membersData);
+      }
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `chats/${selectedChat.id}`);
+    }
+  };
+
+  const removeMemberFromGroup = async (uid: string) => {
+    if (!selectedChat || selectedChat.type !== 'group' || !user) return;
+    try {
+      const chatRef = doc(db, 'chats', selectedChat.id);
+      const chatDoc = await getDoc(chatRef);
+      if (!chatDoc.exists()) return;
+      
+      const currentMembers = chatDoc.data().memberIds || [];
+      const newMembers = currentMembers.filter((m: string) => m !== uid);
+      
+      await updateDoc(chatRef, { memberIds: newMembers });
+      await deleteDoc(doc(db, 'chats', selectedChat.id, 'members', uid));
+
+      // Refresh local members list
+      const resMem = await getDocs(collection(db, 'chats', selectedChat.id, 'members'));
+      const membersData = await Promise.all(resMem.docs.map(async (d) => {
+        const userDoc = await getDoc(doc(db, 'users', d.id));
+        return { id: d.id, ...userDoc.data() } as UserProfile;
+      }));
+      setCurrentGroupMembers(membersData);
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `chats/${selectedChat.id}`);
+    }
+  };
+
   const updateProfile = async () => {
     setIsSaving(true);
     try {
-      const resProfile = await fetch('/api/users/update-profile', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user?.id, username: editUsername, avatarUrl: selectedAvatar }),
-      });
-      
-      const resNotif = await fetch('/api/users/notification-settings', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user?.id, enabled: notificationsEnabled }),
-      });
-
-      if (resProfile.ok && resNotif.ok) {
-        if (user) {
-          updateUser({ ...user, username: editUsername, avatarUrl: selectedAvatar, notificationEnabled: notificationsEnabled ? 1 : 0 });
-        }
+      if (user) {
+        await updateUser({ 
+          username: editUsername, 
+          avatarUrl: selectedAvatar, 
+          notificationEnabled: notificationsEnabled ? 1 : 0 
+        });
         setShowSavedMessage(true);
         setTimeout(() => setShowSavedMessage(false), 3000);
       }
     } catch (e) {
       console.error("Failed to update profile", e);
+      setToast({ message: "Failed to update profile", type: 'error' });
     } finally {
       setIsSaving(false);
     }
   };
 
   const toggleBlock = async (friend: UserProfile) => {
+    if (!user) return;
     const isBlocked = friend.status === 'blocked';
-    const endpoint = isBlocked ? '/api/friends/unblock' : '/api/friends/block';
+    const newStatus = isBlocked ? 'accepted' : 'blocked';
     
     try {
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user?.id, friendId: friend.id }),
+      await updateDoc(doc(db, 'users', user.id, 'friends', friend.id), {
+        status: newStatus,
+        updatedAt: serverTimestamp()
       });
       
-      if (res.ok) {
-        fetchFriends();
-        if (selectedChat?.id === friend.id) {
-          setSelectedChat({ ...friend, status: isBlocked ? 'accepted' : 'blocked' });
-        }
+      if (selectedChat?.id === friend.id) {
+        setSelectedChat({ ...friend, status: newStatus });
       }
-    } catch (e) {}
+      setToast({ message: isBlocked ? "User unblocked" : "User blocked", type: 'info' });
+    } catch (e) {
+      handleFirestoreError(e, OperationType.UPDATE, `users/${user.id}/friends/${friend.id}`);
+    }
   };
 
   const removeFriend = async (friend: UserProfile) => {
+    if (!user) return;
     if (!confirm(`Are you sure you want to remove ${friend.username} from your contacts?`)) return;
     try {
-      const res = await fetch('/api/friends/remove', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ userId: user?.id, friendId: friend.id }),
-      });
+      await deleteDoc(doc(db, 'users', user.id, 'friends', friend.id));
+      await deleteDoc(doc(db, 'users', friend.id, 'friends', user.id));
       
-      if (res.ok) {
-        setToast({ message: "Connection removed", type: 'info' });
-        fetchFriends();
-        setSelectedChat(null);
-        setMobileView('chats');
-      }
-    } catch (e) {}
+      setToast({ message: "Connection removed", type: 'info' });
+      setSelectedChat(null);
+      setMobileView('chats');
+    } catch (e) {
+      handleFirestoreError(e, OperationType.DELETE, `users/${user.id}/friends/${friend.id}`);
+    }
   };
 
   const startChat = async (target: ChatTarget) => {
@@ -542,85 +671,23 @@ export default function ChatApp() {
     setMessages([]);
     setShowGroupSettings(false);
     
-    // Fetch messages for both DM and Group
-    const currentUserId = user?.id;
-    if (!currentUserId && target.type !== 'group') return;
-
-    try {
-      const url = target.type === 'group' 
-        ? `/api/chats/messages/${target.id}` 
-        : `/api/chats/messages/${target.id}?userId=${currentUserId}`;
-        
-      const resMsg = await fetch(url);
-      if (resMsg.ok) {
-        setMessages(await resMsg.json());
-        if (target.type === 'group') {
-          socket?.emit('join_chat', target.id);
-        }
-      }
+    if (target.type === 'group') {
+      const g = target as Group;
+      setEditGroupName(g.name);
+      setSelectedGroupAvatar(g.avatarUrl || AVATAR_OPTIONS[0]);
       
-      if (target.type === 'group') {
-        const g = target as Group;
-        setEditGroupName(g.name);
-        setSelectedGroupAvatar(g.avatarUrl || AVATAR_OPTIONS[0]);
-        
-        const resMem = await fetch(`/api/chats/members/${target.id}`);
-        if (resMem.ok) {
-          setCurrentGroupMembers(await resMem.json());
-        }
+      // Fetch members from Firestore
+      try {
+        const resMem = await getDocs(collection(db, 'chats', target.id, 'members'));
+        const membersData = await Promise.all(resMem.docs.map(async (d) => {
+          const userDoc = await getDoc(doc(db, 'users', d.id));
+          return { id: d.id, ...userDoc.data() } as UserProfile;
+        }));
+        setCurrentGroupMembers(membersData);
+      } catch (e) {
+        handleFirestoreError(e, OperationType.LIST, `chats/${target.id}/members`);
       }
-    } catch (e) {}
-  };
-
-  const updateGroupInfo = async () => {
-    if (!selectedChat || selectedChat.type !== 'group') return;
-    try {
-      const res = await fetch('/api/chats/update', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          chatId: selectedChat.id, 
-          userId: user?.id, 
-          name: editGroupName, 
-          avatarUrl: selectedGroupAvatar 
-        }),
-      });
-      if (res.ok) {
-        fetchGroups();
-        setSelectedChat({ ...selectedChat, name: editGroupName, avatarUrl: selectedGroupAvatar } as Group);
-        setShowGroupSettings(false);
-      }
-    } catch (e) {}
-  };
-
-  const addMemberToGroup = async (uid: string) => {
-    if (!selectedChat || selectedChat.type !== 'group') return;
-    try {
-      const res = await fetch('/api/chats/members/add', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chatId: selectedChat.id, adminId: user?.id, userId: uid }),
-      });
-      if (res.ok) {
-        const resMem = await fetch(`/api/chats/members/${selectedChat.id}`);
-        if (resMem.ok) setCurrentGroupMembers(await resMem.json());
-      }
-    } catch (e) {}
-  };
-
-  const removeMemberFromGroup = async (uid: string) => {
-    if (!selectedChat || selectedChat.type !== 'group') return;
-    try {
-      const res = await fetch('/api/chats/members/remove', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ chatId: selectedChat.id, adminId: user?.id, userId: uid }),
-      });
-      if (res.ok) {
-        const resMem = await fetch(`/api/chats/members/${selectedChat.id}`);
-        if (resMem.ok) setCurrentGroupMembers(await resMem.json());
-      }
-    } catch (e) {}
+    }
   };
 
   const UserAvatar = ({ src, name, size = "w-10 h-10", status }: { src?: string | null, name: string, size?: string, status?: number }) => (

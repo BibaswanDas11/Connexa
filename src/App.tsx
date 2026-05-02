@@ -4,7 +4,6 @@
  */
 
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { SocketProvider } from './context/SocketContext';
 import AuthScreen from './components/AuthScreen';
 import ChatApp from './components/ChatApp';
 
@@ -19,11 +18,7 @@ function AppContent() {
     );
   }
 
-  return (
-    <SocketProvider userId={user?.id}>
-      {!user ? <AuthScreen /> : <ChatApp />}
-    </SocketProvider>
-  );
+  return !user ? <AuthScreen /> : <ChatApp />;
 }
 
 export default function App() {

@@ -1,0 +1,96 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User profile and status information",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "username": { "type": "string" },
+        "email": { "type": "string" },
+        "connexaId": { "type": "string" },
+        "avatarUrl": { "type": "string" },
+        "notificationEnabled": { "type": "boolean" },
+        "onlineStatus": { "type": "integer" },
+        "lastSeen": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "username", "email", "connexaId"]
+    },
+    "Friend": {
+      "title": "Friend",
+      "description": "Friendship relationship status",
+      "type": "object",
+      "properties": {
+        "userId": { "type": "string" },
+        "friendId": { "type": "string" },
+        "status": { "type": "string", "enum": ["pending", "accepted", "blocked"] },
+        "updatedAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["userId", "friendId", "status"]
+    },
+    "Chat": {
+      "title": "Chat",
+      "description": "Group chat metadata",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string" },
+        "type": { "type": "string", "enum": ["group"] },
+        "createdBy": { "type": "string" },
+        "avatarUrl": { "type": "string" },
+        "createdAt": { "type": "string", "format": "date-time" }
+      },
+      "required": ["id", "name", "type", "createdBy"]
+    },
+    "Message": {
+      "title": "Message",
+      "description": "A chat message",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "senderId": { "type": "string" },
+        "senderName": { "type": "string" },
+        "senderAvatar": { "type": "string" },
+        "content": { "type": "string" },
+        "isForwarded": { "type": "boolean" },
+        "createdAt": { "type": "string", "format": "date-time" },
+        "readReceipt": { "type": "integer" },
+        "chatId": { "type": "string" },
+        "receiverId": { "type": "string" }
+      },
+      "required": ["id", "senderId", "content", "createdAt"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": "User",
+      "description": "Stored user profiles"
+    },
+    "/users/{userId}/friends/{friendId}": {
+      "schema": "Friend",
+      "description": "Stored friendship status"
+    },
+    "/chats/{chatId}": {
+      "schema": "Chat",
+      "description": "Stored group chat info"
+    },
+    "/chats/{chatId}/members/{memberId}": {
+      "schema": {
+        "type": "object",
+        "properties": {
+          "userId": { "type": "string" },
+          "joinedAt": { "type": "string", "format": "date-time" }
+        }
+      },
+      "description": "Chat membership"
+    },
+    "/chats/{chatId}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Group chat messages"
+    },
+    "/direct_messages/{dmPath}/messages/{messageId}": {
+      "schema": "Message",
+      "description": "Direct messages between two users"
+    }
+  }
+}

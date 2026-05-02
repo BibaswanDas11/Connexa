@@ -1,4 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
+import { auth, db } from '../lib/firebase';
+import { onAuthStateChanged, signOut } from 'firebase/auth';
+import { doc, getDoc, setDoc } from 'firebase/firestore';
 
 interface User {
   id: string;
@@ -13,7 +16,7 @@ interface AuthContextType {
   user: User | null;
   token: string | null;
   login: (token: string, user: User) => void;
-  updateUser: (user: User) => void;
+  updateUser: (userBody: Partial<User>) => void;
   logout: () => void;
   loading: boolean;
 }
@@ -32,32 +35,56 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    const savedToken = localStorage.getItem('connexa_token');
-    const savedUser = localStorage.getItem('connexa_user');
-    if (savedToken && savedUser) {
-      setToken(savedToken);
-      setUser(JSON.parse(savedUser));
-    }
-    setLoading(false);
+    const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
+      if (firebaseUser) {
+        const idToken = await firebaseUser.getIdToken();
+        setToken(idToken);
+        
+        // Fetch additional user data from Firestore
+        const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
+        if (userDoc.exists()) {
+          const data = userDoc.data();
+          setUser({
+            id: firebaseUser.uid,
+            email: firebaseUser.email || '',
+            username: data.username,
+            connexaId: data.connexaId,
+            avatarUrl: data.avatarUrl,
+            notificationEnabled: data.notificationEnabled,
+          });
+        }
+      } else {
+        setUser(null);
+        setToken(null);
+      }
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, []);
 
   const login = (newToken: string, newUser: User) => {
     setToken(newToken);
     setUser(newUser);
-    localStorage.setItem('connexa_token', newToken);
-    localStorage.setItem('connexa_user', JSON.stringify(newUser));
   };
 
-  const updateUser = (newUser: User) => {
-    setUser(newUser);
-    localStorage.setItem('connexa_user', JSON.stringify(newUser));
+  const updateUser = async (userUpdate: Partial<User>) => {
+    if (!user) return;
+    const updatedUser = { ...user, ...userUpdate };
+    setUser(updatedUser);
+    
+    // Persist to Firestore
+    try {
+      await setDoc(doc(db, 'users', user.id), userUpdate, { merge: true });
+    } catch (e) {
+      console.error("Error updating profile:", e);
+    }
   };
 
-  const logout = () => {
+  const logout = async () => {
+    await signOut(auth);
     setToken(null);
     setUser(null);
-    localStorage.removeItem('connexa_token');
-    localStorage.removeItem('connexa_user');
   };
 
   return (

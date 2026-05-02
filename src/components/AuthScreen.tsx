@@ -1,6 +1,14 @@
 import React, { useState } from 'react';
 import { useAuth } from '../context/AuthContext';
 import { Loader2, MessageSquare } from 'lucide-react';
+import { auth, db } from '../lib/firebase';
+import { 
+  signInWithEmailAndPassword, 
+  createUserWithEmailAndPassword, 
+  confirmPasswordReset,
+  sendPasswordResetEmail
+} from 'firebase/auth';
+import { doc, setDoc } from 'firebase/firestore';
 
 export default function AuthScreen() {
   const [isLogin, setIsLogin] = useState(true);
@@ -13,35 +21,53 @@ export default function AuthScreen() {
   const [success, setSuccess] = useState('');
   const { login } = useAuth();
 
+  // Helper to generate Unique Connexa ID
+  function generateConnexaId() {
+    return "CX-" + Math.random().toString(36).substring(2, 7).toUpperCase();
+  }
+
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault();
     setLoading(true);
     setError('');
     setSuccess('');
 
-    const endpoint = isForgot 
-      ? '/api/auth/reset-password' 
-      : (isLogin ? '/api/auth/login' : '/api/auth/register');
-    
-    const body = isForgot 
-      ? { email, newPassword: password } 
-      : (isLogin ? { email, password } : { email, password, username });
-
     try {
-      const res = await fetch(endpoint, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-      });
-
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Something went wrong');
-
       if (isForgot) {
-        setSuccess('Password reset successful. Check if you can login.');
-        setIsForgot(false);
+        await sendPasswordResetEmail(auth, email);
+        setSuccess('Password reset link sent to your email.');
+      } else if (isLogin) {
+        const userCredential = await signInWithEmailAndPassword(auth, email, password);
+        const idToken = await userCredential.user.getIdToken();
+        // The AuthProvider useEffect will handle state update, 
+        // but we can call login if we want to force immediate redirect if needed
       } else {
-        login(data.token, data.user);
+        const userCredential = await createUserWithEmailAndPassword(auth, email, password);
+        const connexaId = generateConnexaId();
+        
+        // Initialize user in Firestore
+        const userObj = {
+          id: userCredential.user.uid,
+          email,
+          username,
+          connexaId,
+          avatarUrl: `https://api.dicebear.com/7.x/shapes/svg?seed=${username}`,
+          notificationEnabled: 1,
+          onlineStatus: 1,
+          lastSeen: new Date().toISOString()
+        };
+
+        await setDoc(doc(db, 'users', userCredential.user.uid), userObj);
+        
+        const idToken = await userCredential.user.getIdToken();
+        login(idToken, {
+          id: userCredential.user.uid,
+          email,
+          username,
+          connexaId,
+          avatarUrl: userObj.avatarUrl,
+          notificationEnabled: 1
+        });
       }
     } catch (err: any) {
       setError(err.message);
