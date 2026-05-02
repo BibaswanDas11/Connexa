@@ -262,6 +262,7 @@ async function startServer() {
       await db.run("INSERT INTO friends (user_id, friend_id, status) VALUES (?, ?, ?)", [userId, friendId, 'pending']);
       
       // Notify the receiver in real-time
+      console.log(`Sending friend request notification to user ${friendId}`);
       io.to(friendId).emit("friend_request_received", { senderId: userId });
       
       res.json({ message: "Friend request sent successfully" });

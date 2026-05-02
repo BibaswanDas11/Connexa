@@ -268,13 +268,15 @@ export default function ChatApp() {
       }
     });
     
-    socket.on('friend_request_received', () => {
+    socket.on('friend_request_received', (data: { senderId: string }) => {
       fetchPendingRequests();
+      setToast({ message: "You received a new friend request!", type: 'info' });
     });
     
-    socket.on('friend_accepted', () => {
+    socket.on('friend_accepted', (data: { friendId: string }) => {
       fetchFriends();
       fetchPendingRequests();
+      setToast({ message: "Friend request accepted!", type: 'success' });
     });
     
     socket.on('friend_removed', ({ friendId }) => {
@@ -658,7 +660,12 @@ export default function ChatApp() {
 
         <div className="mt-4 px-4 flex-1 overflow-y-auto">
           <div className="flex items-center justify-between px-2 mb-4">
-            <h3 className="text-slate-500 text-[11px] font-bold uppercase tracking-widest">Connections</h3>
+            <h3 className="text-slate-500 text-[11px] font-bold uppercase tracking-widest flex items-center gap-2">
+              Connections
+              {pendingRequests.length > 0 && (
+                <span className="w-2 h-2 bg-red-500 rounded-full animate-pulse" />
+              )}
+            </h3>
             <button type="button" onClick={() => setShowGroupCreate(true)} className="text-indigo-400 hover:text-indigo-300">
               <Users className="w-4 h-4" />
             </button>
@@ -737,9 +744,14 @@ export default function ChatApp() {
               {/* Chat Header */}
               <div className="h-16 border-b border-slate-200 flex items-center justify-between px-4 md:px-6 shrink-0 bg-white z-10">
                 <div className="flex items-center gap-3">
-                  <button type="button" onClick={() => { setSelectedChat(null); setMobileView('chats'); }} className="md:hidden p-2 -ml-2 text-slate-400">
-                    <X className="w-5 h-5" />
-                  </button>
+        <div className="md:hidden p-2 -ml-2 text-slate-400 flex items-center justify-center relative">
+          <button type="button" onClick={() => { setSelectedChat(null); setMobileView('chats'); }} className="p-2">
+            <X className="w-5 h-5" />
+          </button>
+          {pendingRequests.length > 0 && (
+            <div className="absolute top-2 right-2 w-2 h-2 bg-red-500 rounded-full border border-white" />
+          )}
+        </div>
                   {selectedChat.type === 'group' ? (
                     <UserAvatar src={(selectedChat as Group).avatarUrl} name={(selectedChat as Group).name} size="w-8 h-8" />
                   ) : (
@@ -1209,8 +1221,11 @@ export default function ChatApp() {
           <MessageCircle className="w-6 h-6" />
           <span className="text-[9px] font-bold uppercase">Chats</span>
         </button>
-        <button type="button" onClick={() => setMobileView('profile')} className={cn("flex flex-col items-center gap-1", (mobileView === 'profile' || mobileView === 'settings') ? "text-indigo-600" : "text-slate-300")}>
+        <button type="button" onClick={() => setMobileView('profile')} className={cn("flex flex-col items-center gap-1 relative", (mobileView === 'profile' || mobileView === 'settings') ? "text-indigo-600" : "text-slate-300")}>
           <User className="w-6 h-6" />
+          {pendingRequests.length > 0 && (
+            <div className="absolute top-0 -right-1 w-2.5 h-2.5 bg-red-500 rounded-full border-2 border-white" />
+          )}
           <span className="text-[9px] font-bold uppercase">Me</span>
         </button>
       </div>
