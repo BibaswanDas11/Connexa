@@ -144,7 +144,7 @@ const AVATAR_OPTIONS = [
 export default function ChatApp() {
   const { user, updateUser, logout } = useAuth();
   const [searchId, setSearchId] = useState('');
-  const [searchResults, setSearchResults] = useState<UserProfile | null>(null);
+  const [searchResults, setSearchResults] = useState<UserProfile[]>([]);
   const [selectedChat, setSelectedChat] = useState<ChatTarget | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [inputMessage, setInputMessage] = useState('');
@@ -335,23 +335,26 @@ export default function ChatApp() {
   const handleSearch = async () => {
     if (!searchId || !user) return;
     try {
-      const q = query(collection(db, 'users'), where('connexaId', '==', searchId));
+      // Search by username (case-insensitive search is tricky in Firestore, 
+      // but we'll assume exact match for now as requested "same usernames")
+      const q = query(collection(db, 'users'), where('username', '==', searchId));
       const snapshot = await getDocs(q);
       
-      if (!snapshot.empty) {
-        const foundUser = snapshot.docs[0].data() as UserProfile;
+      const results: UserProfile[] = [];
+      for (const docSnapshot of snapshot.docs) {
+        const foundUser = docSnapshot.data() as UserProfile;
         
-        // Check relationship
+        // Check relationship for each result
         const relDoc = await getDoc(doc(db, 'users', user.id, 'friends', foundUser.id));
         const relation = relDoc.exists() ? relDoc.data().status : null;
         
-        setSearchResults({ ...foundUser, relation });
-      } else {
-        setSearchResults(null);
+        results.push({ ...foundUser, relation });
       }
+      
+      setSearchResults(results);
     } catch (error) {
       handleFirestoreError(error, OperationType.GET, 'users');
-      setSearchResults(null);
+      setSearchResults([]);
     }
   };
 
@@ -376,9 +379,11 @@ export default function ChatApp() {
       });
 
       setToast({ message: "Friend request sent successfully!", type: 'success' });
-      if (searchResults && searchResults.id === friendId) {
-        setSearchResults({ ...searchResults, relation: 'pending' });
-      }
+      
+      // Update the specific user in results
+      setSearchResults(prev => prev.map(res => 
+        res.id === friendId ? { ...res, relation: 'pending' } : res
+      ));
     } catch (err: any) {
       handleFirestoreError(err, OperationType.WRITE, 'friends');
     } finally {
@@ -1191,65 +1196,79 @@ export default function ChatApp() {
               </div>
             </div>
 
-            {/* Search by ID */}
+            {/* Search by Username */}
             <div className="mb-8 shrink-0">
               <h3 className="text-[10px] font-bold text-slate-900 uppercase tracking-widest mb-4">Find Connections</h3>
               <div className="relative">
                 <input
                   type="text"
-                  placeholder="CX-..."
+                  placeholder="Enter username..."
                   value={searchId}
                   onChange={(e) => setSearchId(e.target.value)}
                   onKeyDown={(e) => e.key === 'Enter' && handleSearch()}
-                  className="w-full bg-white border border-slate-200 rounded-xl pl-4 pr-10 py-3 text-xs font-mono focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm transition-all"
+                  className="w-full bg-white border border-slate-200 rounded-xl pl-4 pr-10 py-3 text-xs font-bold focus:ring-2 focus:ring-indigo-500 outline-none shadow-sm transition-all"
                 />
                 <button type="button" onClick={handleSearch} className="absolute right-2 top-2 p-1.5 text-indigo-600 hover:bg-slate-50 rounded-lg transition-all">
                   <Search className="w-4 h-4" />
                 </button>
               </div>
-              {searchResults && (
-                <motion.div initial={{ opacity: 0, y: 10 }} animate={{ opacity: 1, y: 0 }} className="mt-3 p-4 bg-white border border-indigo-100 rounded-xl shadow-lg ring-4 ring-indigo-50/50">
-                  <div className="flex items-center gap-3 mb-3">
-                    <UserAvatar src={searchResults.avatarUrl} name={searchResults.username} size="w-10 h-10" />
-                    <div className="flex-1 overflow-hidden">
-                      <p className="text-xs font-bold text-slate-900 truncate">{searchResults.username}</p>
-                      <p className="text-[10px] font-mono text-indigo-500 font-bold">{searchResults.connexaId}</p>
-                    </div>
-                  </div>
-                  {searchResults.id === user?.id ? (
-                    <div className="w-full py-2.5 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-bold uppercase tracking-widest text-center">
-                      This is you
-                    </div>
-                  ) : searchResults.relation === 'accepted' || chats.some(f => f.id === searchResults.id) ? (
-                    <div className="w-full py-2.5 bg-green-50 text-green-600 rounded-xl text-[10px] font-bold uppercase tracking-widest text-center border border-green-100 flex items-center justify-center gap-2">
-                      <Check className="w-3 h-3" /> Already Friends
-                    </div>
-                  ) : searchResults.relation === 'pending' ? (
-                    <div className="w-full py-2.5 bg-amber-50 text-amber-600 rounded-xl text-[10px] font-bold uppercase tracking-widest text-center border border-amber-100 flex items-center justify-center gap-2">
-                      <motion.div animate={{ opacity: [1, 0.5, 1] }} transition={{ repeat: Infinity, duration: 2 }}>
-                        <Check className="w-3 h-3" />
-                      </motion.div>
-                      Request Pending
-                    </div>
-                  ) : (
-                    <button 
-                      type="button" 
-                      disabled={friendRequestLoading === searchResults.id}
-                      onClick={() => sendFriendRequest(searchResults!.id)} 
-                      className={cn(
-                        "w-full py-3 bg-indigo-600 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg active:scale-[0.98] flex items-center justify-center gap-2",
-                        friendRequestLoading === searchResults.id && "opacity-70 cursor-not-allowed"
-                      )}
+              {searchResults.length > 0 && (
+                <div className="mt-3 space-y-3 max-h-[300px] overflow-y-auto p-1">
+                  {searchResults.map((result) => (
+                    <motion.div 
+                      key={`search-res-${result.id}`}
+                      initial={{ opacity: 0, y: 10 }} 
+                      animate={{ opacity: 1, y: 0 }} 
+                      className="p-4 bg-white border border-indigo-100 rounded-xl shadow-lg ring-4 ring-indigo-50/50"
                     >
-                      {friendRequestLoading === searchResults.id ? (
-                        <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: "linear" }} className="w-3 h-3 border-2 border-white border-t-transparent rounded-full" />
+                      <div className="flex items-center gap-3 mb-3">
+                        <UserAvatar src={result.avatarUrl} name={result.username} size="w-10 h-10" />
+                        <div className="flex-1 overflow-hidden">
+                          <p className="text-xs font-bold text-slate-900 truncate">{result.username}</p>
+                          <p className="text-[10px] font-mono text-indigo-500 font-bold">{result.connexaId}</p>
+                        </div>
+                      </div>
+                      {result.id === user?.id ? (
+                        <div className="w-full py-2.5 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-bold uppercase tracking-widest text-center">
+                          This is you
+                        </div>
+                      ) : result.relation === 'accepted' || chats.some(f => f.id === result.id) ? (
+                        <div className="w-full py-2.5 bg-green-50 text-green-600 rounded-xl text-[10px] font-bold uppercase tracking-widest text-center border border-green-100 flex items-center justify-center gap-2">
+                          <Check className="w-3 h-3" /> Already Friends
+                        </div>
+                      ) : result.relation === 'pending' ? (
+                        <div className="w-full py-2.5 bg-amber-50 text-amber-600 rounded-xl text-[10px] font-bold uppercase tracking-widest text-center border border-amber-100 flex items-center justify-center gap-2">
+                          <motion.div animate={{ opacity: [1, 0.5, 1] }} transition={{ repeat: Infinity, duration: 2 }}>
+                            <Check className="w-3 h-3" />
+                          </motion.div>
+                          Request Pending
+                        </div>
                       ) : (
-                        <UserPlus className="w-3 h-3" />
+                        <button 
+                          type="button" 
+                          disabled={friendRequestLoading === result.id}
+                          onClick={() => sendFriendRequest(result.id)} 
+                          className={cn(
+                            "w-full py-3 bg-indigo-600 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg active:scale-[0.98] flex items-center justify-center gap-2",
+                            friendRequestLoading === result.id && "opacity-70 cursor-not-allowed"
+                          )}
+                        >
+                          {friendRequestLoading === result.id ? (
+                            <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: "linear" }} className="w-3 h-3 border-2 border-white border-t-transparent rounded-full" />
+                          ) : (
+                            <UserPlus className="w-3 h-3" />
+                          )}
+                          Add Friend
+                        </button>
                       )}
-                      Add Friend
-                    </button>
-                  )}
-                </motion.div>
+                    </motion.div>
+                  ))}
+                </div>
+              )}
+              {searchId && searchResults.length === 0 && !isSaving && (
+                <div className="mt-4 text-center py-4 border border-dashed border-slate-200 rounded-xl">
+                   <p className="text-[10px] text-slate-400 italic">No users found with that username</p>
+                </div>
               )}
             </div>
 
