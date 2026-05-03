@@ -35,6 +35,13 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
+    // 1. Initial check: Try to load from LocalStorage for instant UI render
+    const cachedUser = localStorage.getItem('connexa_user');
+    if (cachedUser) {
+      setUser(JSON.parse(cachedUser));
+      // We don't set loading to false yet, we wait for Firebase to confirm the session
+    }
+
     const unsubscribe = onAuthStateChanged(auth, async (firebaseUser) => {
       if (firebaseUser) {
         const idToken = await firebaseUser.getIdToken();
@@ -44,18 +51,21 @@ export const AuthProvider = ({ children }: { children: React.ReactNode }) => {
         const userDoc = await getDoc(doc(db, 'users', firebaseUser.uid));
         if (userDoc.exists()) {
           const data = userDoc.data();
-          setUser({
+          const userProfile = {
             id: firebaseUser.uid,
             email: firebaseUser.email || '',
             username: data.username,
             connexaId: data.connexaId,
             avatarUrl: data.avatarUrl,
             notificationEnabled: data.notificationEnabled,
-          });
+          };
+          setUser(userProfile);
+          localStorage.setItem('connexa_user', JSON.stringify(userProfile));
         }
       } else {
         setUser(null);
         setToken(null);
+        localStorage.removeItem('connexa_user');
       }
       setLoading(false);
     });

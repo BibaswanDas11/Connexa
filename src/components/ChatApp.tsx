@@ -1198,7 +1198,14 @@ export default function ChatApp() {
 
             {/* Search by Username */}
             <div className="mb-8 shrink-0">
-              <h3 className="text-[10px] font-bold text-slate-900 uppercase tracking-widest mb-4">Find Connections</h3>
+              <div className="flex items-center justify-between mb-4">
+                <h3 className="text-[10px] font-bold text-slate-900 uppercase tracking-widest">Find Connections</h3>
+                {searchResults.length > 0 && (
+                  <span className="text-[10px] font-bold px-2 py-0.5 bg-indigo-50 text-indigo-600 rounded-full border border-indigo-100">
+                    {searchResults.length} {searchResults.length === 1 ? 'match' : 'matches'}
+                  </span>
+                )}
+              </div>
               <div className="relative">
                 <input
                   type="text"
@@ -1212,62 +1219,66 @@ export default function ChatApp() {
                   <Search className="w-4 h-4" />
                 </button>
               </div>
+              
               {searchResults.length > 0 && (
-                <div className="mt-3 space-y-3 max-h-[300px] overflow-y-auto p-1">
-                  {searchResults.map((result) => (
-                    <motion.div 
-                      key={`search-res-${result.id}`}
-                      initial={{ opacity: 0, y: 10 }} 
-                      animate={{ opacity: 1, y: 0 }} 
-                      className="p-4 bg-white border border-indigo-100 rounded-xl shadow-lg ring-4 ring-indigo-50/50"
-                    >
-                      <div className="flex items-center gap-3 mb-3">
-                        <UserAvatar src={result.avatarUrl} name={result.username} size="w-10 h-10" />
-                        <div className="flex-1 overflow-hidden">
-                          <p className="text-xs font-bold text-slate-900 truncate">{result.username}</p>
-                          <p className="text-[10px] font-mono text-indigo-500 font-bold">{result.connexaId}</p>
+                <div className="mt-3 space-y-3 max-h-[300px] overflow-y-auto p-1 scrollbar-hide">
+                  <AnimatePresence mode="popLayout">
+                    {searchResults.map((result) => (
+                      <motion.div 
+                        key={`search-res-${result.id}`}
+                        initial={{ opacity: 0, x: -10 }} 
+                        animate={{ opacity: 1, x: 0 }}
+                        exit={{ opacity: 0, scale: 0.95 }}
+                        className="p-4 bg-white border border-indigo-100 rounded-xl shadow-lg ring-4 ring-indigo-50/50"
+                      >
+                        <div className="flex items-center gap-3 mb-3">
+                          <UserAvatar src={result.avatarUrl} name={result.username} size="w-10 h-10" />
+                          <div className="flex-1 overflow-hidden">
+                            <p className="text-xs font-bold text-slate-900 truncate">{result.username}</p>
+                            <p className="text-[10px] font-mono text-indigo-500 font-bold">{result.connexaId}</p>
+                          </div>
                         </div>
-                      </div>
-                      {result.id === user?.id ? (
-                        <div className="w-full py-2.5 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-bold uppercase tracking-widest text-center">
-                          This is you
-                        </div>
-                      ) : result.relation === 'accepted' || chats.some(f => f.id === result.id) ? (
-                        <div className="w-full py-2.5 bg-green-50 text-green-600 rounded-xl text-[10px] font-bold uppercase tracking-widest text-center border border-green-100 flex items-center justify-center gap-2">
-                          <Check className="w-3 h-3" /> Already Friends
-                        </div>
-                      ) : result.relation === 'pending' ? (
-                        <div className="w-full py-2.5 bg-amber-50 text-amber-600 rounded-xl text-[10px] font-bold uppercase tracking-widest text-center border border-amber-100 flex items-center justify-center gap-2">
-                          <motion.div animate={{ opacity: [1, 0.5, 1] }} transition={{ repeat: Infinity, duration: 2 }}>
-                            <Check className="w-3 h-3" />
-                          </motion.div>
-                          Request Pending
-                        </div>
-                      ) : (
-                        <button 
-                          type="button" 
-                          disabled={friendRequestLoading === result.id}
-                          onClick={() => sendFriendRequest(result.id)} 
-                          className={cn(
-                            "w-full py-3 bg-indigo-600 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg active:scale-[0.98] flex items-center justify-center gap-2",
-                            friendRequestLoading === result.id && "opacity-70 cursor-not-allowed"
-                          )}
-                        >
-                          {friendRequestLoading === result.id ? (
-                            <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: "linear" }} className="w-3 h-3 border-2 border-white border-t-transparent rounded-full" />
-                          ) : (
-                            <UserPlus className="w-3 h-3" />
-                          )}
-                          Add Friend
-                        </button>
-                      )}
-                    </motion.div>
-                  ))}
+                        {result.id === user?.id ? (
+                          <div className="w-full py-2.5 bg-slate-100 text-slate-500 rounded-xl text-[10px] font-bold uppercase tracking-widest text-center">
+                            This is you
+                          </div>
+                        ) : result.relation === 'accepted' || chats.some(f => f.id === result.id) ? (
+                          <div className="w-full py-2.5 bg-green-50 text-green-600 rounded-xl text-[10px] font-bold uppercase tracking-widest text-center border border-green-100 flex items-center justify-center gap-2">
+                            <Check className="w-3 h-3" /> Already Friends
+                          </div>
+                        ) : result.relation === 'pending' ? (
+                          <div className="w-full py-2.5 bg-amber-50 text-amber-600 rounded-xl text-[10px] font-bold uppercase tracking-widest text-center border border-amber-100 flex items-center justify-center gap-2">
+                            <motion.div animate={{ opacity: [1, 0.5, 1] }} transition={{ repeat: Infinity, duration: 2 }}>
+                              <Check className="w-3 h-3" />
+                            </motion.div>
+                            Request Pending
+                          </div>
+                        ) : (
+                          <button 
+                            type="button" 
+                            disabled={friendRequestLoading === result.id}
+                            onClick={() => sendFriendRequest(result.id)} 
+                            className={cn(
+                              "w-full py-3 bg-indigo-600 text-white rounded-xl text-[10px] font-bold uppercase tracking-widest hover:bg-indigo-700 transition-all shadow-lg active:scale-[0.98] flex items-center justify-center gap-2",
+                              friendRequestLoading === result.id && "opacity-70 cursor-not-allowed"
+                            )}
+                          >
+                            {friendRequestLoading === result.id ? (
+                              <motion.div animate={{ rotate: 360 }} transition={{ repeat: Infinity, duration: 1, ease: "linear" }} className="w-3 h-3 border-2 border-white border-t-transparent rounded-full" />
+                            ) : (
+                              <UserPlus className="w-3 h-3" />
+                            )}
+                            Add Friend
+                          </button>
+                        )}
+                      </motion.div>
+                    ))}
+                  </AnimatePresence>
                 </div>
               )}
-              {searchId && searchResults.length === 0 && !isSaving && (
-                <div className="mt-4 text-center py-4 border border-dashed border-slate-200 rounded-xl">
-                   <p className="text-[10px] text-slate-400 italic">No users found with that username</p>
+              {searchId && searchResults.length === 0 && (
+                <div className="mt-4 text-center py-6 border border-dashed border-slate-200 rounded-xl">
+                   <p className="text-[10px] text-slate-400 italic font-medium">No results for "{searchId}"</p>
                 </div>
               )}
             </div>
